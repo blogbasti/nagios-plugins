@@ -1,15 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 import urllib2
+import pprint
 try:
     import json
 except ImportError:
     import simplejson as json  # NOQA
 
-UNKNOWN = -1
 OK = 0
 WARNING = 1
 CRITICAL = 2
+UNKNOWN = 3
 
 API_URL = 'https://www.googleapis.com/pagespeedonline/v1/runPagespeed' \
     '?url=%s&key=%s'
@@ -18,6 +19,27 @@ HOSTNAME = ''
 WARNING_SCORE = 0
 CRITICAL_SCORE = 0
 
+def catch_open_rules(ps_data):
+    open_rules = {}
+    for ruleName, rule in ps_data.get('formattedResults').get('ruleResults').items():
+        if rule['ruleImpact'] != 0.0:
+            open_rules[ruleName] = rule
+    return open_rules
+
+def format_open_rules(open_rules):
+    advices = "WOW. Well done!"
+    if len(open_rules) > 0:
+        advices = "Your should optimize the following rules to get X more points:\n"
+    sorted_rules = sorted(open_rules.items(), key=lambda item:
+    item[1]['ruleImpact'], reverse=True)
+    for key,rule in sorted_rules:
+        advices += "[%.2f] %s \n" % (rule['ruleImpact'],
+                                     rule['localizedRuleName'])
+    return advices
+
+def format_perfdata(attrs):
+    perfdata = "".join([" '%s'=%s" % (key, value) for key, value in attrs.items()])
+    return perfdata
 
 def main():
     try:
@@ -25,19 +47,26 @@ def main():
     except urllib2.HTTPError, e:
         print 'Error! %s' % e
         raise SystemExit(UNKNOWN)
+    except urllib2.URLError, e:
+        print 'Error! %s' % e
+        raise SystemExit(UNKNOWN)
     data = json.loads(request.read())
 
     if data.get('error'):
         print 'Error! %s' % data.get('error').get('errors')[0].get('reason')
         raise SystemExit(UNKNOWN)
+    if options.verbose:
+        pprint.pprint(data)
     _score = data.get('score')
+    _pageStats = data.get('pageStats')
+    _pageStats['score'] = _score
+    _perfdata = format_perfdata(_pageStats)
+    _formated_open_rules = format_open_rules(catch_open_rules(data))
+    print 'Current score: %s/100 %s|%s' % (_score, _formated_open_rules, _perfdata)
     if _score <= CRITICAL_SCORE:
-        print 'Critical! Current score: %s/100' % _score
         raise SystemExit(CRITICAL)
     if _score <= WARNING_SCORE:
-        print 'Warning! Current score: %s/100' % _score
         raise SystemExit(WARNING)
-    print 'OK! Current score: %s/100' % _score
     raise SystemExit(OK)
 
 
@@ -51,11 +80,12 @@ if __name__ == '__main__':
                       default=0)
     parser.add_option('-c', '--critical', type=float, dest='critical',
                       default=0)
+    parser.add_option('-v', '--verbose', action="store_true", dest='verbose')
     options, args = parser.parse_args()
 
     if not options.hostname or not options.key:
-        print 'Critical! Missing parameters'
-        raise SystemExit(CRITICAL)
+        print 'Missing parameters'
+        raise SystemExit(UNKNOWN)
 
     HOSTNAME = options.hostname
     API_KEY = options.key
